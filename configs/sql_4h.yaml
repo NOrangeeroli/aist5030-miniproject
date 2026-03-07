@@ -1,0 +1,35 @@
+model_name: Qwen/Qwen2.5-0.5B-Instruct
+dataset_name: b-mc2/sql-create-context
+output_dir: outputs/train_4h
+max_seq_len: 384
+eos_token: ""
+
+data:
+  train_size: 20000
+  val_size: 2000
+  test_size: 2000
+  seed: 42
+  split_index_path: outputs/splits/full_split_indices.json
+
+oft:
+  r: 16
+  block_size: 16
+  module_dropout: 0.0
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
+
+train:
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 16
+  learning_rate: 2.0e-4
+  num_train_epochs: 2
+  max_steps: 1800
+  warmup_ratio: 0.05
+  lr_scheduler_type: cosine
+  logging_steps: 20
+  eval_strategy: steps
+  eval_steps: 100
+  save_steps: 100
+  save_total_limit: 2
+  early_stopping_patience: 3
+  report_to: []
