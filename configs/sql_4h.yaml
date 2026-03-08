@@ -12,7 +12,6 @@ data:
   split_index_path: outputs/splits/full_split_indices.json
 
 oft:
-  r: 16
   block_size: 16
   module_dropout: 0.0
   target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]

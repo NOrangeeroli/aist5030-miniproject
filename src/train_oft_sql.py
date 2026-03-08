@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 from pathlib import Path
 from typing import Any, Dict
 
+import matplotlib.pyplot as plt
 import torch
 import yaml
 from peft import OFTConfig, TaskType, get_peft_model
@@ -33,6 +35,38 @@ def supports_bf16() -> bool:
 
 def tokenize_function(examples, tokenizer, max_length: int):
     return tokenizer(examples["text"], truncation=True, max_length=max_length)
+
+
+def save_loss_curve(trainer_state_path: Path, out_path: Path) -> None:
+    with open(trainer_state_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+    hist = state.get("log_history", [])
+
+    steps_train, losses_train = [], []
+    steps_eval, losses_eval = [], []
+    for item in hist:
+        if "step" in item and "loss" in item:
+            steps_train.append(item["step"])
+            losses_train.append(item["loss"])
+        if "step" in item and "eval_loss" in item:
+            steps_eval.append(item["step"])
+            losses_eval.append(item["eval_loss"])
+
+    if not steps_train and not steps_eval:
+        return
+
+    plt.figure(figsize=(8, 5))
+    if steps_train:
+        plt.plot(steps_train, losses_train, label="train loss")
+    if steps_eval:
+        plt.plot(steps_eval, losses_eval, label="eval loss")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.title("Training Curves")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,21 +105,40 @@ def main() -> None:
 
     model = AutoModelForCausalLM.from_pretrained(
         cfg["model_name"],
-        torch_dtype=torch.bfloat16 if supports_bf16() else torch.float16,
+        dtype=torch.bfloat16 if supports_bf16() else torch.float16,
         device_map="auto",
     )
 
-    oft_cfg = OFTConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=cfg["oft"]["r"],
-        oft_block_size=cfg["oft"]["block_size"],
-        target_modules=cfg["oft"]["target_modules"],
-        module_dropout=cfg["oft"].get("module_dropout", 0.0),
-    )
+    oft_settings = cfg["oft"]
+    oft_kwargs = {
+        "task_type": TaskType.CAUSAL_LM,
+        "target_modules": oft_settings["target_modules"],
+        "module_dropout": oft_settings.get("module_dropout", 0.0),
+    }
+    has_r = "r" in oft_settings
+    has_block_size = "block_size" in oft_settings
+    if has_r and has_block_size:
+        raise ValueError(
+            "Config under `oft` must set exactly one of `r` or `block_size` for OFT. "
+            "Please remove one from the YAML config."
+        )
+    if has_r:
+        oft_kwargs["r"] = oft_settings["r"]
+    elif has_block_size:
+        oft_kwargs["oft_block_size"] = oft_settings["block_size"]
+    else:
+        raise ValueError("Config under `oft` must include either `r` or `block_size`.")
+
+    oft_cfg = OFTConfig(**oft_kwargs)
     model = get_peft_model(model, oft_cfg)
     model.print_trainable_parameters()
 
     use_bf16 = supports_bf16()
+    warmup_steps = cfg["train"].get("warmup_steps")
+    if warmup_steps is None:
+        warmup_ratio = cfg["train"].get("warmup_ratio", 0.03)
+        warmup_steps = int(cfg["train"]["max_steps"] * warmup_ratio)
+
     train_args = TrainingArguments(
         output_dir=str(output_dir),
         per_device_train_batch_size=cfg["train"]["per_device_train_batch_size"],
@@ -94,7 +147,7 @@ def main() -> None:
         learning_rate=cfg["train"]["learning_rate"],
         num_train_epochs=cfg["train"].get("num_train_epochs", 1),
         max_steps=cfg["train"]["max_steps"],
-        warmup_ratio=cfg["train"].get("warmup_ratio", 0.03),
+        warmup_steps=warmup_steps,
         lr_scheduler_type=cfg["train"].get("lr_scheduler_type", "cosine"),
         logging_steps=cfg["train"].get("logging_steps", 20),
         eval_strategy=cfg["train"].get("eval_strategy", "steps"),
@@ -111,15 +164,21 @@ def main() -> None:
 
     collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-    trainer = Trainer(
-        model=model,
-        args=train_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=tokenized["validation"],
-        tokenizer=tokenizer,
-        data_collator=collator,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=cfg["train"].get("early_stopping_patience", 3))],
-    )
+    trainer_kwargs = {
+        "model": model,
+        "args": train_args,
+        "train_dataset": tokenized["train"],
+        "eval_dataset": tokenized["validation"],
+        "data_collator": collator,
+        "callbacks": [EarlyStoppingCallback(early_stopping_patience=cfg["train"].get("early_stopping_patience", 3))],
+    }
+    trainer_signature = inspect.signature(Trainer.__init__).parameters
+    if "tokenizer" in trainer_signature:
+        trainer_kwargs["tokenizer"] = tokenizer
+    elif "processing_class" in trainer_signature:
+        trainer_kwargs["processing_class"] = tokenizer
+
+    trainer = Trainer(**trainer_kwargs)
 
     train_result = trainer.train()
     trainer.save_model(str(output_dir / "best_adapter"))
@@ -131,7 +190,28 @@ def main() -> None:
 
     trainer.log_metrics("train", metrics)
     trainer.save_metrics("train", metrics)
+
+    test_loss_metrics = trainer.evaluate(eval_dataset=tokenized["test"], metric_key_prefix="test")
+    trainer.log_metrics("test", test_loss_metrics)
+    trainer.save_metrics("test", test_loss_metrics)
+
     trainer.save_state()
+
+    save_loss_curve(output_dir / "trainer_state.json", output_dir / "loss_curves.png")
+
+    with open(output_dir / "test_performance.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "finetuned": {
+                    "test_loss": test_loss_metrics.get("test_loss"),
+                    "test_runtime": test_loss_metrics.get("test_runtime"),
+                    "test_samples_per_second": test_loss_metrics.get("test_samples_per_second"),
+                    "test_steps_per_second": test_loss_metrics.get("test_steps_per_second"),
+                },
+            },
+            f,
+            indent=2,
+        )
 
     with open(output_dir / "train_summary.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)

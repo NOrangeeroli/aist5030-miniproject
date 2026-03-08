@@ -1,15 +1,16 @@
-"""Evaluate baseline vs OFT-adapted model for text-to-SQL."""
+"""Evaluate baseline vs adapter model for text-to-SQL generation."""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import warnings
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-import sqlparse
 import torch
+import sqlparse
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -39,21 +40,6 @@ def sql_parses(query: str) -> bool:
         return False
 
 
-def generate_sql(model, tokenizer, prompt: str, max_new_tokens: int = 128) -> str:
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    with torch.no_grad():
-        output_ids = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            temperature=0.0,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-    generated = tokenizer.decode(output_ids[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True)
-    return generated.strip()
-
-
 def compute_metrics(rows: List[Dict[str, str]]) -> Dict[str, float]:
     n = len(rows)
     if n == 0:
@@ -64,12 +50,25 @@ def compute_metrics(rows: List[Dict[str, str]]) -> Dict[str, float]:
     return {"exact_match": em, "parse_success": parse_ok}
 
 
-def run_eval(model, tokenizer, test_ds, max_new_tokens: int, sample_count: int) -> List[Dict[str, str]]:
-    rows = []
+def run_eval_vllm(
+    llm,
+    test_ds,
+    max_new_tokens: int,
+    sample_count: int,
+    lora_request=None,
+) -> List[Dict[str, str]]:
     upto = min(sample_count, len(test_ds))
-    for i in range(upto):
-        ex = test_ds[i]
-        pred = generate_sql(model, tokenizer, ex["prompt"], max_new_tokens=max_new_tokens)
+    subset = [test_ds[i] for i in range(upto)]
+    prompts = [row["prompt"] for row in subset]
+
+    from vllm import SamplingParams
+
+    sampling_params = SamplingParams(temperature=0.0, max_tokens=max_new_tokens)
+    outputs = llm.generate(prompts, sampling_params, lora_request=lora_request)
+
+    rows = []
+    for ex, out in zip(subset, outputs):
+        pred = out.outputs[0].text.strip() if out.outputs else ""
         rows.append(
             {
                 "question": ex["question"],
@@ -79,6 +78,56 @@ def run_eval(model, tokenizer, test_ds, max_new_tokens: int, sample_count: int) 
             }
         )
     return rows
+
+
+def run_eval_transformers(
+    model,
+    tokenizer,
+    test_ds,
+    max_new_tokens: int,
+    sample_count: int,
+) -> List[Dict[str, str]]:
+    upto = min(sample_count, len(test_ds))
+    subset = [test_ds[i] for i in range(upto)]
+    rows = []
+    for ex in subset:
+        encoded = tokenizer(ex["prompt"], return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            out = model.generate(
+                **encoded,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        pred = tokenizer.decode(out[0][encoded["input_ids"].shape[1] :], skip_special_tokens=True).strip()
+        rows.append(
+            {
+                "question": ex["question"],
+                "schema": ex["context"],
+                "gold": ex["answer"],
+                "prediction": pred,
+            }
+        )
+    return rows
+
+
+def load_adapter_peft_type(adapter_path: str) -> Optional[str]:
+    config_path = Path(adapter_path) / "adapter_config.json"
+    if not config_path.exists():
+        return None
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f).get("peft_type")
+
+
+def try_build_vllm(model_name: str, enable_lora: bool):
+    try:
+        from vllm import LLM
+
+        return LLM(model=model_name, dtype="auto", trust_remote_code=True, enable_lora=enable_lora)
+    except Exception as exc:
+        warnings.warn(f"vLLM is unavailable in this environment ({exc}); falling back to Transformers generation.")
+        return None
 
 
 def save_rows(path: Path, rows: List[Dict[str, str]]) -> None:
@@ -103,21 +152,67 @@ def main() -> None:
     formatted = format_for_training(splits, PromptConfig())
     test_ds = formatted["test"]
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    adapter_peft_type = load_adapter_peft_type(args.adapter_path) if args.adapter_path else None
+    can_use_vllm_lora = adapter_peft_type == "LORA"
 
-    base_model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype="auto", device_map="auto")
-    base_rows = run_eval(base_model, tokenizer, test_ds, args.max_new_tokens, args.sample_count)
+    llm = try_build_vllm(args.model_name, enable_lora=can_use_vllm_lora)
+
+    if llm is not None:
+        base_rows = run_eval_vllm(llm, test_ds, args.max_new_tokens, args.sample_count)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        base_model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            dtype=(
+                torch.bfloat16
+                if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+                else (torch.float16 if torch.cuda.is_available() else torch.float32)
+            ),
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        base_rows = run_eval_transformers(base_model, tokenizer, test_ds, args.max_new_tokens, args.sample_count)
     base_metrics = compute_metrics(base_rows)
 
     results: Dict[str, Any] = {"baseline": base_metrics}
     save_rows(out_dir / "baseline_predictions.csv", base_rows)
 
     if args.adapter_path:
-        adapted_base = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype="auto", device_map="auto")
-        oft_model = PeftModel.from_pretrained(adapted_base, args.adapter_path)
-        oft_rows = run_eval(oft_model, tokenizer, test_ds, args.max_new_tokens, args.sample_count)
+        oft_rows: List[Dict[str, str]]
+        if llm is not None and can_use_vllm_lora:
+            from vllm.lora.request import LoRARequest
+
+            try:
+                oft_rows = run_eval_vllm(
+                    llm,
+                    test_ds,
+                    args.max_new_tokens,
+                    args.sample_count,
+                    lora_request=LoRARequest("sql_adapter", 1, args.adapter_path),
+                )
+            except Exception as exc:
+                warnings.warn(f"vLLM adapter loading failed ({exc}); falling back to Transformers+PEFT for adapter eval.")
+                llm = None
+                can_use_vllm_lora = False
+        if llm is None or not can_use_vllm_lora:
+            tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            base_model = AutoModelForCausalLM.from_pretrained(
+                args.model_name,
+                dtype=(
+                    torch.bfloat16
+                    if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+                    else (torch.float16 if torch.cuda.is_available() else torch.float32)
+                ),
+                device_map="auto",
+                trust_remote_code=True,
+            )
+            adapted_model = PeftModel.from_pretrained(base_model, args.adapter_path)
+            oft_rows = run_eval_transformers(adapted_model, tokenizer, test_ds, args.max_new_tokens, args.sample_count)
+
         oft_metrics = compute_metrics(oft_rows)
         results["oft"] = oft_metrics
         save_rows(out_dir / "oft_predictions.csv", oft_rows)
