@@ -1,16 +1,18 @@
-"""Evaluate baseline vs adapter model for text-to-SQL generation."""
+"""Evaluate baseline vs merged-OFT model for text-to-SQL generation."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
+import shutil
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import torch
 import sqlparse
+import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -29,6 +31,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-new-tokens", type=int, default=128)
     p.add_argument("--sample-count", type=int, default=200)
     p.add_argument("--output-dir", type=str, default="outputs/eval")
+    p.add_argument(
+        "--merged-model-dir",
+        type=str,
+        default=None,
+        help="Directory to store merged full-weights checkpoint (defaults to <output-dir>/merged_oft_model).",
+    )
+    p.add_argument(
+        "--force-remerge",
+        action="store_true",
+        help="Delete existing merged checkpoint before recreating it.",
+    )
     return p.parse_args()
 
 
@@ -50,13 +63,7 @@ def compute_metrics(rows: List[Dict[str, str]]) -> Dict[str, float]:
     return {"exact_match": em, "parse_success": parse_ok}
 
 
-def run_eval_vllm(
-    llm,
-    test_ds,
-    max_new_tokens: int,
-    sample_count: int,
-    lora_request=None,
-) -> List[Dict[str, str]]:
+def run_eval_vllm(llm, test_ds, max_new_tokens: int, sample_count: int) -> List[Dict[str, str]]:
     upto = min(sample_count, len(test_ds))
     subset = [test_ds[i] for i in range(upto)]
     prompts = [row["prompt"] for row in subset]
@@ -64,7 +71,7 @@ def run_eval_vllm(
     from vllm import SamplingParams
 
     sampling_params = SamplingParams(temperature=0.0, max_tokens=max_new_tokens)
-    outputs = llm.generate(prompts, sampling_params, lora_request=lora_request)
+    outputs = llm.generate(prompts, sampling_params)
 
     rows = []
     for ex, out in zip(subset, outputs):
@@ -120,14 +127,45 @@ def load_adapter_peft_type(adapter_path: str) -> Optional[str]:
         return json.load(f).get("peft_type")
 
 
-def try_build_vllm(model_name: str, enable_lora: bool):
+def try_build_vllm(model_name: str):
     try:
         from vllm import LLM
 
-        return LLM(model=model_name, dtype="auto", trust_remote_code=True, enable_lora=enable_lora)
+        return LLM(model=model_name, dtype="auto", trust_remote_code=True, enable_lora=False)
     except Exception as exc:
         warnings.warn(f"vLLM is unavailable in this environment ({exc}); falling back to Transformers generation.")
         return None
+
+
+def merge_oft_adapter_into_base(model_name: str, adapter_path: str, merged_model_dir: Path, force_remerge: bool) -> Path:
+    if merged_model_dir.exists() and force_remerge:
+        shutil.rmtree(merged_model_dir)
+
+    if merged_model_dir.exists() and (merged_model_dir / "config.json").exists():
+        return merged_model_dir
+
+    merged_model_dir.mkdir(parents=True, exist_ok=True)
+
+    tokenizer = AutoTokenizer.from_pretrained(adapter_path, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        dtype=(
+            torch.bfloat16
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            else (torch.float16 if torch.cuda.is_available() else torch.float32)
+        ),
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    adapted_model = PeftModel.from_pretrained(base_model, adapter_path)
+    merged_model = adapted_model.merge_and_unload()
+
+    merged_model.save_pretrained(merged_model_dir)
+    tokenizer.save_pretrained(merged_model_dir)
+    return merged_model_dir
 
 
 def save_rows(path: Path, rows: List[Dict[str, str]]) -> None:
@@ -152,10 +190,8 @@ def main() -> None:
     formatted = format_for_training(splits, PromptConfig())
     test_ds = formatted["test"]
 
-    adapter_peft_type = load_adapter_peft_type(args.adapter_path) if args.adapter_path else None
-    can_use_vllm_lora = adapter_peft_type == "LORA"
 
-    llm = try_build_vllm(args.model_name, enable_lora=can_use_vllm_lora)
+    llm = try_build_vllm(args.model_name)
 
     if llm is not None:
         base_rows = run_eval_vllm(llm, test_ds, args.max_new_tokens, args.sample_count)
@@ -178,30 +214,37 @@ def main() -> None:
 
     results: Dict[str, Any] = {"baseline": base_metrics}
     save_rows(out_dir / "baseline_predictions.csv", base_rows)
-
+    del llm
+    
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    
+    
+    merged_model_path: Optional[Path] = None
     if args.adapter_path:
-        oft_rows: List[Dict[str, str]]
-        if llm is not None and can_use_vllm_lora:
-            from vllm.lora.request import LoRARequest
+        adapter_peft_type = load_adapter_peft_type(args.adapter_path)
+        if adapter_peft_type != "OFT":
+            warnings.warn(f"Expected OFT adapter but found {adapter_peft_type}; attempting PEFT merge anyway.")
 
-            try:
-                oft_rows = run_eval_vllm(
-                    llm,
-                    test_ds,
-                    args.max_new_tokens,
-                    args.sample_count,
-                    lora_request=LoRARequest("sql_adapter", 1, args.adapter_path),
-                )
-            except Exception as exc:
-                warnings.warn(f"vLLM adapter loading failed ({exc}); falling back to Transformers+PEFT for adapter eval.")
-                llm = None
-                can_use_vllm_lora = False
-        if llm is None or not can_use_vllm_lora:
-            tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+        merged_dir = Path(args.merged_model_dir) if args.merged_model_dir else out_dir / "merged_oft_model"
+        merged_model_path = merge_oft_adapter_into_base(
+            model_name=args.model_name,
+            adapter_path=args.adapter_path,
+            merged_model_dir=merged_dir,
+            force_remerge=args.force_remerge,
+        )
+
+    if merged_model_path is not None:
+        merged_llm = try_build_vllm(str(merged_model_path))
+        if merged_llm is not None:
+            oft_rows = run_eval_vllm(merged_llm, test_ds, args.max_new_tokens, args.sample_count)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(str(merged_model_path), use_fast=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            base_model = AutoModelForCausalLM.from_pretrained(
-                args.model_name,
+            merged_model = AutoModelForCausalLM.from_pretrained(
+                str(merged_model_path),
                 dtype=(
                     torch.bfloat16
                     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -210,11 +253,11 @@ def main() -> None:
                 device_map="auto",
                 trust_remote_code=True,
             )
-            adapted_model = PeftModel.from_pretrained(base_model, args.adapter_path)
-            oft_rows = run_eval_transformers(adapted_model, tokenizer, test_ds, args.max_new_tokens, args.sample_count)
+            oft_rows = run_eval_transformers(merged_model, tokenizer, test_ds, args.max_new_tokens, args.sample_count)
 
         oft_metrics = compute_metrics(oft_rows)
         results["oft"] = oft_metrics
+        results["merged_model_path"] = str(merged_model_path)
         save_rows(out_dir / "oft_predictions.csv", oft_rows)
 
         qual = []

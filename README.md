@@ -6,7 +6,8 @@ This repository implements an end-to-end pipeline to finetune a pretrained LLM w
 
 - `src/data_sql.py`: dataset loading, reproducible splitting, prompt formatting, SQL normalization.
 - `src/train_oft_sql.py`: OFT adapter training with Hugging Face `transformers` + `peft`.
-- `src/eval_sql.py`: baseline and post-finetuning evaluation (exact match + SQL parse success + qualitative outputs).
+- `src/merge_oft_adapter.py`: merge OFT adapter back into full model weights for deployment/inference.
+- `src/eval_sql.py`: baseline and post-finetuning evaluation (merges OFT first, then compares base vs merged model).
 - `src/plot_metrics.py`: plotting training/evaluation artifacts.
 - `configs/sql_smoke.yaml`: 20-step smoke configuration.
 - `configs/sql_4h.yaml`: bounded full-run configuration for ~4h single GPU budget.
@@ -38,7 +39,16 @@ python src/train_oft_sql.py --config configs/sql_smoke.yaml
 python src/train_oft_sql.py --config configs/sql_4h.yaml
 ```
 
-## 4) Baseline + OFT evaluation
+## 4) Merge OFT adapter into full model weights
+
+```bash
+python src/merge_oft_adapter.py \
+  --model-name Qwen/Qwen2.5-0.5B-Instruct \
+  --adapter-path outputs/train_4h/best_adapter \
+  --output-dir outputs/train_4h/merged_model
+```
+
+## 5) Baseline + merged-OFT evaluation (vLLM)
 
 ```bash
 python src/eval_sql.py \
@@ -49,13 +59,17 @@ python src/eval_sql.py \
   --output-dir outputs/eval
 ```
 
+`eval_sql.py` first merges the OFT adapter into full model weights (`outputs/eval/merged_oft_model` by default), then runs inference on:
+- the base model
+- the merged finetuned model (without runtime adapters)
+
 Outputs:
 - `outputs/eval/metrics.json`
 - `outputs/eval/baseline_predictions.csv`
 - `outputs/eval/oft_predictions.csv`
 - `outputs/eval/qualitative_examples.json`
 
-## 5) Plot report figures (CPU)
+## 6) Plot report figures (CPU)
 
 ```bash
 python src/plot_metrics.py \
