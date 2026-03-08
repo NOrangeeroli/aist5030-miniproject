@@ -61,9 +61,21 @@ def plot_eval_bars(metrics_path: Path, out_dir: Path) -> None:
 
     rows = []
     for model_name, vals in metrics.items():
+        if not isinstance(vals, dict):
+            continue
+
         for metric_name, value in vals.items():
-            rows.append({"model": model_name, "metric": metric_name, "value": value})
+            if isinstance(value, (int, float)):
+                rows.append({"model": model_name, "metric": metric_name, "value": value})
+
+    if not rows and all(isinstance(v, (int, float)) for v in metrics.values()):
+        rows = [
+            {"model": "model", "metric": metric_name, "value": value}
+            for metric_name, value in metrics.items()
+        ]
+
     if not rows:
+        print("No plottable numeric eval metrics found")
         return
 
     df = pd.DataFrame(rows)
