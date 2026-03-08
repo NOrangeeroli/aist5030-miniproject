@@ -1,0 +1,165 @@
+\documentclass[11pt]{article}
+
+\usepackage[letterpaper,margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    urlcolor=blue!60!black
+}
+
+\newcommand{\projecttitle}{[Project Title]}
+\newcommand{\coursename}{AIST5030}
+\newcommand{\teamname}{[Team Name]}
+\newcommand{\memberlist}{[Name 1, Name 2, Name 3]}
+\newcommand{\modelname}{Qwen/Qwen2.5-0.5B-Instruct}
+\newcommand{\datasetname}{b-mc2/sql-create-context}
+
+\newcommand{\insertfigure}[3]{
+    \begin{figure}[H]
+        \centering
+        \IfFileExists{#1}{
+            \includegraphics[width=#2\linewidth]{#1}
+        }{
+            \fbox{
+                \begin{minipage}[c][0.25\textheight][c]{0.92\linewidth}
+                    \centering
+                    Missing figure file: \texttt{\detokenize{#1}}\\[0.4em]
+                    Replace with your generated plot before submission.
+                \end{minipage}
+            }
+        }
+        \caption{#3}
+    \end{figure}
+}
+
+\begin{document}
+
+\begin{center}
+    {\LARGE \textbf{\projecttitle}}\\[0.5em]
+    {\large \coursename\ Mini-Project Report Template}\\[0.5em]
+    \teamname\\
+    \memberlist\\
+    \today
+\end{center}
+
+\vspace{0.5em}
+\noindent\textbf{How to use this template.}
+Replace bracketed placeholders with your own content. This template is aligned with the project deliverables:
+training/validation curves, baseline-vs-OFT metrics, qualitative examples, and brief error analysis.
+
+\section{Task and Setup}
+\textbf{Task.}
+Finetune a pretrained LLM with OFT for schema-grounded Text-to-SQL generation.
+
+\textbf{Input/Output.}
+Input is a natural language question with SQL schema context (CREATE TABLE statements);
+output is a SQL query.
+
+\begin{table}[H]
+    \centering
+    \caption{Reproducibility Configuration}
+    \begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{0.28\linewidth}X}
+        \toprule
+        Item & Value \\
+        \midrule
+        Base model & \modelname \\
+        Dataset & \datasetname \\
+        Train/Val/Test split sizes & [e.g., 20000 / 2000 / 2000] \\
+        OFT target modules & [e.g., attention + MLP linear layers] \\
+        Max sequence length & [e.g., 384] \\
+        Training budget & [e.g., single GPU, around 4 hours] \\
+        Key files & \texttt{configs/sql\_4h.yaml}, \texttt{src/train\_oft\_sql.py}, \texttt{src/eval\_sql.py} \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\section{Method}
+\textbf{Prompting.}
+Briefly describe your prompt format and any output constraints (e.g., SQL-only decoding).
+
+\textbf{OFT Design.}
+Describe the OFT adapter setup, trainable parameters, and reasoning for module selection.
+
+\textbf{Training Strategy.}
+Report optimizer, learning rate schedule, mixed precision, gradient accumulation, and early-stop/max-step controls.
+
+\section{Results}
+\subsection{Training Dynamics}
+\insertfigure{../outputs/plots/loss_curves.png}{0.9}{Training and validation loss curves.}
+\noindent\textit{Write 3--5 lines on convergence behavior, overfitting signs, and stability.}
+
+\subsection{Baseline vs OFT Metrics}
+\begin{table}[H]
+    \centering
+    \caption{Evaluation Metrics on the Fixed Test Split}
+    \begin{tabular}{lccc}
+        \toprule
+        Model & Exact Match (\%) & SQL Parse Success (\%) & Notes \\
+        \midrule
+        Baseline (pre-finetune) & [ ] & [ ] & [ ] \\
+        OFT (post-finetune) & [ ] & [ ] & [ ] \\
+        Delta (OFT - Baseline) & [ ] & [ ] & [ ] \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\insertfigure{../outputs/plots/eval_metrics.png}{0.75}{Bar chart of evaluation metrics (optional if table is sufficient).}
+
+\subsection{Qualitative Examples}
+\begin{table}[H]
+    \centering
+    \caption{Representative Before/After Predictions}
+    \begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{0.19\linewidth}X}
+        \toprule
+        Field & Content \\
+        \midrule
+        Question & [Natural language question] \\
+        Schema snippet & [Relevant CREATE TABLE lines] \\
+        Gold SQL & [Ground truth SQL] \\
+        Baseline prediction & [Model output before finetuning] \\
+        OFT prediction & [Model output after finetuning] \\
+        Notes & [Why improved or still wrong] \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\noindent Repeat the qualitative example block for 8--12 examples in your final report.
+
+\section{Error Analysis}
+Categorize common failure types and estimate their frequency:
+\begin{itemize}[leftmargin=1.4em]
+    \item Schema linking errors
+    \item Wrong join or missing join conditions
+    \item Aggregation mistakes (COUNT/SUM/AVG)
+    \item Filtering or comparison mistakes
+    \item Output format errors (non-SQL tokens, malformed syntax)
+\end{itemize}
+
+\noindent For each major failure type, include one short example and a likely cause.
+
+\section{Conclusion}
+Summarize the final takeaway in 4--6 lines:
+\begin{itemize}[leftmargin=1.4em]
+    \item Did OFT improve exact match and parse success?
+    \item Which error types remain hard?
+    \item What one follow-up experiment would you run next?
+\end{itemize}
+
+\vfill
+\noindent\textbf{Checklist before submission:}
+\begin{itemize}[leftmargin=1.4em]
+    \item Replace all bracketed placeholders.
+    \item Verify all figures and tables are updated with final values.
+    \item Keep the report within the page limit required by the course.
+\end{itemize}
+
+\end{document}
