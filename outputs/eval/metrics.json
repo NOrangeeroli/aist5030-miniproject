@@ -1,0 +1,11 @@
+{
+  "baseline": {
+    "exact_match": 0.0015,
+    "parse_success": 1.0
+  },
+  "oft": {
+    "exact_match": 0.2735,
+    "parse_success": 1.0
+  },
+  "merged_model_path": "outputs/eval/merged_oft_model"
+}

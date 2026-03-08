@@ -1,0 +1,86 @@
+[
+  {
+    "question": "What City is the Jal hotel in?",
+    "schema": "CREATE TABLE table_name_77 (city VARCHAR, name VARCHAR)",
+    "gold": "SELECT city FROM table_name_77 WHERE name = \"jal hotel\"",
+    "baseline_prediction": "```sql\nSELECT city FROM table_name_77 WHERE name = 'Jal';\n```",
+    "oft_prediction": "SELECT city FROM table_name_77 WHERE name = \"jal\""
+  },
+  {
+    "question": "Which Label has a Region of canada?",
+    "schema": "CREATE TABLE table_name_12 (label VARCHAR, region VARCHAR)",
+    "gold": "SELECT label FROM table_name_12 WHERE region = \"canada\"",
+    "baseline_prediction": "```sql\nSELECT label FROM table_name_12 WHERE region = 'Canada';\n```",
+    "oft_prediction": "SELECT label FROM table_name_12 WHERE region = \"canada\""
+  },
+  {
+    "question": "Who was the parent on the order of 6?",
+    "schema": "CREATE TABLE table_name_96 (parent VARCHAR, order VARCHAR)",
+    "gold": "SELECT parent FROM table_name_96 WHERE order = 6",
+    "baseline_prediction": "```sql\nSELECT parent FROM table_name_96 WHERE order = '6';\n```",
+    "oft_prediction": "SELECT parent FROM table_name_96 WHERE order = \"6\""
+  },
+  {
+    "question": "In what season did the Sporting CP Club have a 1. round?",
+    "schema": "CREATE TABLE table_name_78 (season VARCHAR, round VARCHAR, club VARCHAR)",
+    "gold": "SELECT season FROM table_name_78 WHERE round = \"1. round\" AND club = \"sporting cp\"",
+    "baseline_prediction": "```sql\nSELECT season FROM table_name_78 WHERE round = '1';\n```",
+    "oft_prediction": "SELECT season FROM table_name_78 WHERE round = \"1\" AND club = \"sporting cp club\" LIMIT 1;"
+  },
+  {
+    "question": "Who did the high rebounds in the game where Douglas (28) did the high points?",
+    "schema": "CREATE TABLE table_18894744_6 (high_rebounds VARCHAR, high_points VARCHAR)",
+    "gold": "SELECT high_rebounds FROM table_18894744_6 WHERE high_points = \"Douglas (28)\"",
+    "baseline_prediction": "```sql\nSELECT high_rebounds, high_points\nFROM table_18894744_6\nWHERE high_points = 'Douglas (28) did the high points';\n```",
+    "oft_prediction": "SELECT high_rebounds FROM table_18894744_6 WHERE high_points = \"Douglas (28)\" AND high_rebounds = \"high rebounds\""
+  },
+  {
+    "question": "What is the median income for the region where 24.4% pf people make below 60% of the median income?",
+    "schema": "CREATE TABLE table_25042332_16 (median_income___intl INTEGER, below_60_percentage_of_median_income VARCHAR)",
+    "gold": "SELECT MIN(median_income___intl) AS $__ FROM table_25042332_16 WHERE below_60_percentage_of_median_income = \"24.4%\"",
+    "baseline_prediction": "```sql\nSELECT AVG(median_income___intl) AS median_income\nFROM table_25042332_16\nWHERE below_60_percentage_of_median_income = '24.4%'\n```",
+    "oft_prediction": "SELECT median_income___intl FROM table_25042332_16 WHERE below_60_percentage_of_median_income = \"24.4%\" ORDER BY median_income___intl DESC LIMIT 1;"
+  },
+  {
+    "question": "What's the name of the carabins stadium?",
+    "schema": "CREATE TABLE table_name_55 (football_stadium VARCHAR, team VARCHAR)",
+    "gold": "SELECT football_stadium FROM table_name_55 WHERE team = \"carabins\"",
+    "baseline_prediction": "SELECT football_stadium FROM table_name_55 WHERE team = 'carabins' LIMIT 1;",
+    "oft_prediction": "SELECT football_stadium FROM table_name_55 WHERE team = \"carabins\""
+  },
+  {
+    "question": "Which Season has a Third of colin hodgson?",
+    "schema": "CREATE TABLE table_name_47 (season VARCHAR, third VARCHAR)",
+    "gold": "SELECT season FROM table_name_47 WHERE third = \"colin hodgson\"",
+    "baseline_prediction": "```sql\nSELECT season FROM table_name_47 WHERE third = 'Third of Colin Hodgson';\n```",
+    "oft_prediction": "SELECT season FROM table_name_47 WHERE third = \"colin hodgson\" LIMIT 1;"
+  },
+  {
+    "question": "What season had an acquisition of free agency, and was higher than 9?",
+    "schema": "CREATE TABLE table_name_89 (season VARCHAR, acquisition_via VARCHAR, number VARCHAR)",
+    "gold": "SELECT season FROM table_name_89 WHERE acquisition_via = \"free agency\" AND number > 9",
+    "baseline_prediction": "```sql\nSELECT season, acquisition_via, number\nFROM table_name_89\nWHERE acquisition_via = 'free agency' AND number > 9;\n```",
+    "oft_prediction": "SELECT season FROM table_name_89 WHERE acquisition_via = \"free agency\" AND number > 9;"
+  },
+  {
+    "question": "What was the time when Shinya Aoki was the opponent?",
+    "schema": "CREATE TABLE table_name_57 (time VARCHAR, opponent VARCHAR)",
+    "gold": "SELECT time FROM table_name_57 WHERE opponent = \"shinya aoki\"",
+    "baseline_prediction": "```sql\nSELECT time FROM table_name_57 WHERE opponent = 'Shinya Aoki';\n```",
+    "oft_prediction": "SELECT time FROM table_name_57 WHERE opponent = \"shinya aoki\" LIMIT 1;"
+  },
+  {
+    "question": "What was the class when adt champion racing ranked 1st with an audi r8 chassis, and less than 206 points?",
+    "schema": "CREATE TABLE table_name_2 (class VARCHAR, rank VARCHAR, entrant VARCHAR, points VARCHAR, chassis VARCHAR)",
+    "gold": "SELECT class FROM table_name_2 WHERE points < 206 AND chassis = \"audi r8\" AND entrant = \"adt champion racing\" AND rank = \"1st\"",
+    "baseline_prediction": "```sql\nSELECT class\nFROM table_name_2\nWHERE rank = '1st' AND entrant = 'adt champion racing' AND chassis = 'audi r8' AND points < 206;\n```",
+    "oft_prediction": "SELECT class FROM table_name_2 WHERE entrant = \"adt champion racing\" AND rank = \"1\" AND points < \"206\" AND chassis = \"audi r8\" GROUP BY class HAVING COUNT(class) = 1;"
+  },
+  {
+    "question": "what is the outcome on april 24, 1988?",
+    "schema": "CREATE TABLE table_name_20 (outcome VARCHAR, date VARCHAR)",
+    "gold": "SELECT outcome FROM table_name_20 WHERE date = \"april 24, 1988\"",
+    "baseline_prediction": "```sql\nSELECT outcome FROM table_name_20 WHERE date = '1988-04-24';\n```",
+    "oft_prediction": "SELECT outcome FROM table_name_20 WHERE date = \"april 24 1988\""
+  }
+]
